@@ -17,7 +17,7 @@ import seaborn as sns
 from matplotlib.widgets import EllipseSelector, RectangleSelector
 import matplotlib
 matplotlib.use('TkAgg')
-
+from functools import partial
 
 # output image for detecting dense routing area
 def prepare_dense_image(net_info, pad_via_info, case, pad_diameter):
@@ -42,7 +42,6 @@ def prepare_dense_image(net_info, pad_via_info, case, pad_diameter):
     cv2.imwrite(f"../data/{case}/{case}_real_size.png", img_canvas)
     # cv2.imwrite(f"../real_size/{case}.png", img_canvas)
 
-
 # prepare for the detection image
 def prepare_image(net_info, case, pad_diameter):
     plt.figure(dpi=125, figsize=(4.544, 4.544))
@@ -61,20 +60,18 @@ def prepare_image(net_info, case, pad_diameter):
     cv2.imwrite("../data/detect/detect.png", img)
     plt.close()
 
-
-def toggle_selector(event, selectors):
+def toggle_selector(event):
     print("Key pressed.")
     if event.key == "t":
-        for selector in selectors:
-            name = type(selector).__name__
-            if selector.active:
-                print(f"{name} deactivated.")
-                selector.set_active(False)
-            else:
-                print(f"{name} activated.")
-                selector.set_active(True)
+        name = type(RectangleSelector).__name__
+        if RectangleSelector.active:
+            print(f"{name} deactivated.")
+            RectangleSelector.set_active(False)
+        else:
+            print(f"{name} activated.")
+            RectangleSelector.set_active(True)
 
-def select_callback(eclick, erelease):
+def select_callback(eclick, erelease, coordinates):
     """
     Callback for line selection.
 
@@ -82,45 +79,142 @@ def select_callback(eclick, erelease):
     """
     x1, y1 = eclick.xdata, eclick.ydata
     x2, y2 = erelease.xdata, erelease.ydata
+    coordinates.extend([x1, y1, x2, y2])
+    # findPartialSegments(x1, x2, y1, y2)
     print(f"({x1:3.2f}, {y1:3.2f}) --> ({x2:3.2f}, {y2:3.2f})")
     print(f"The buttons you used were: {eclick.button} {erelease.button}")
 
-def interactive_tool(net_info, pad_via_info, mode, case, pad_diameter, name):
-    fig, ax = plt.subplots(figsize=(50, 50))
+def findPartialNets(net_info, coordinates):
+    partial_net_info = []
+    print(coordinates)
+    for net in net_info:
+        # print(f'net: {net[1][0]}, {net[1][1]}, {net[2][0]}, {net[2][1]}')
+        for segment in net[3]:
+            print(f'{segment[0]}, {segment[1]}, {segment[2]}, {segment[3]}')
+            if (coordinatesWithinRectangle(*coordinates, *segment)):
+                print(*coordinates, *segment)
+                partial_net_info.append(net)
+                break
+    print(len(net_info))
+    print(len(partial_net_info))
+    return partial_net_info
+
+def on_segment(p, q, r):
+    """Given three colinear points p, q, and r, check if point q lies on segment pr"""
+    if (min(p[0], r[0]) <= q[0] <= max(p[0], r[0]) and
+        min(p[1], r[1]) <= q[1] <= max(p[1], r[1])):
+        return True
+    return False
+
+def orientation(p, q, r):
+    """Return the orientation of the triplet (p, q, r).
+    0 -> p, q and r are colinear
+    1 -> Clockwise
+    2 -> Counterclockwise
+    """
+    val = (q[1] - p[1]) * (r[0] - q[0]) - (q[0] - p[0]) * (r[1] - q[1])
+    if val == 0:
+        return 0
+    elif val > 0:
+        return 1
+    else:
+        return 2
+
+def line_intersects(p1, q1, p2, q2):
+    """Check if line segment 'p1q1' and 'p2q2' intersect."""
+    o1 = orientation(p1, q1, p2)
+    o2 = orientation(p1, q1, q2)
+    o3 = orientation(p2, q2, p1)
+    o4 = orientation(p2, q2, q1)
+
+    # General case
+    if (o1 != o2 and o3 != o4):
+        return True
+
+    # Special Cases
+    # p1, q1 and p2 are colinear and p2 lies on segment p1q1
+    if (o1 == 0 and on_segment(p1, p2, q1)):
+        return True
+
+    # p1, q1 and p2 are colinear and q2 lies on segment p1q1
+    if (o2 == 0 and on_segment(p1, q2, q1)):
+        return True
+
+    # p2, q2 and p1 are colinear and p1 lies on segment p2q2
+    if (o3 == 0 and on_segment(p2, p1, q2)):
+        return True
+
+    # p2, q2 and q1 are colinear and q1 lies on segment p2q2
+    if (o4 == 0 and on_segment(p2, q1, q2)):
+        return True
+
+    return False
+
+def line_rectangle_intersection(line_start, line_end, rect_diag1, rect_diag2):
+    """Check if the line intersects with the rectangle defined by diagonal points."""
+    # Rectangle vertices
+    top_left = (min(rect_diag1[0], rect_diag2[0]), max(rect_diag1[1], rect_diag2[1]))
+    bottom_right = (max(rect_diag1[0], rect_diag2[0]), min(rect_diag1[1], rect_diag2[1]))
+    bottom_left = (top_left[0], bottom_right[1])
+    top_right = (bottom_right[0], top_left[1])
+
+    # Check each of the four sides of the rectangle
+    if (line_intersects(line_start, line_end, top_left, top_right) or
+        line_intersects(line_start, line_end, top_right, bottom_right) or
+        line_intersects(line_start, line_end, bottom_right, bottom_left) or
+        line_intersects(line_start, line_end, bottom_left, top_left)):
+        return True
+    return False
+
+def coordinatesWithinRectangle(x1, y1, x2, y2, x1seg, x2seg, y1seg, y2seg):
+    line_start = (x1seg, y1seg)
+    line_end = (x2seg, y2seg)
+    rect_diag1 = (x1, y1)
+    rect_diag2 = (x2, y2)
+    return line_rectangle_intersection(line_start, line_end, rect_diag1, rect_diag2)
+
+def interactive_tool(net_info, pad_via_info, pad_diameter, coordinates):
+    fig, ax = plt.subplots(figsize=(15, 15))
 
     for item in pad_via_info:
         for pad_vias in item.values():
             for pv in pad_vias:
+                # print(f'pad_vias: {pv[0]}, {pv[1]}')
                 ax.scatter(
                     pv[0],
                     pv[1],
-                    s=(pad_diameter // 2) ** 2 / 100,
+                    s=(pad_diameter // 2) ** 2 / 200,
                     edgecolors="gray",
                     facecolors="none",
+                    linewidths=0.5
                 )
     for net in net_info:
+        # print(f'net: {net[1][0]}, {net[1][1]}, {net[2][0]}, {net[2][1]}')
         ax.scatter(
             net[1][0],
             net[1][1],
-            s=(pad_diameter // 2) ** 2 / 100,
+            s=(pad_diameter // 2) ** 2 / 200,
             edgecolors="black",
             facecolors="none",
+            linewidths=0.5
         )
         ax.scatter(
             net[2][0],
             net[2][1],
-            s=(pad_diameter // 2) ** 2 / 100,
+            s=(pad_diameter // 2) ** 2 / 200,
             edgecolors="black",
             facecolors="none",
+            linewidths=0.5
         )
         for segment in net[3]:
             ax.plot([segment[0], segment[1]], [segment[2], segment[3]], color="black")
     ax.axis("square")
+    callback_with_coords = partial(select_callback, coordinates=coordinates)
     selectors = []
     selectors.append(
         RectangleSelector(
             ax,
-            select_callback,
+            callback_with_coords,
             useblit=True,
             button=[1, 3],  # disable middle button
             minspanx=5,
@@ -132,7 +226,6 @@ def interactive_tool(net_info, pad_via_info, mode, case, pad_diameter, name):
     fig.canvas.mpl_connect('key_press_event', toggle_selector)
     plt.show()
     plt.close()
-
 
 # plot the routing results
 def pic(net_info, pad_via_info, mode, case, pad_diameter, name):
@@ -172,7 +265,6 @@ def pic(net_info, pad_via_info, mode, case, pad_diameter, name):
     else:
         plt.show()
     plt.close()
-
 
 # main function
 def main():
@@ -324,7 +416,11 @@ def main():
     net_info, pad_via_info, chip_edge, max_width, grid_size = Parser.Input(
         net_txt, cline_txt, pad_via_txt, layer
     )
-    interactive_tool(net_info, pad_via_info, 1, case, pad_diameter, "partial")
+    coordinates =  []
+    interactive_tool(net_info, pad_via_info, pad_diameter, coordinates)
+    print(coordinates)
+    if (len(coordinates) != 0):
+        net_info=findPartialNets(net_info, coordinates)
     print("===== Finish Selection =====")
     grid_size = math.ceil(grid_size / pooling_size) * pooling_size
     NET = ChangeType.netinfo2NET(net_info)
