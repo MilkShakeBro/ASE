@@ -86,18 +86,21 @@ def select_callback(eclick, erelease, coordinates):
 
 def findPartialNets(net_info, coordinates):
     partial_net_info = []
-    print(coordinates)
+    fixed_partial_net_info = []
     for net in net_info:
         # print(f'net: {net[1][0]}, {net[1][1]}, {net[2][0]}, {net[2][1]}')
         for segment in net[3]:
-            print(f'{segment[0]}, {segment[1]}, {segment[2]}, {segment[3]}')
+            # (x1, x2, y1, y2)
+            # print(f'{segment[0]}, {segment[1]}, {segment[2]}, {segment[3]}')
             if (coordinatesWithinRectangle(*coordinates, *segment)):
                 print(*coordinates, *segment)
                 partial_net_info.append(net)
                 break
+        if (len(partial_net_info) == 0 or partial_net_info[-1] != net):
+            fixed_partial_net_info.append(net)
     print(len(net_info))
     print(len(partial_net_info))
-    return partial_net_info
+    return partial_net_info, fixed_partial_net_info
 
 def on_segment(p, q, r):
     """Given three colinear points p, q, and r, check if point q lies on segment pr"""
@@ -166,12 +169,35 @@ def line_rectangle_intersection(line_start, line_end, rect_diag1, rect_diag2):
         return True
     return False
 
+def line_rectangle_include(line_start, line_end, rect_diag1, rect_diag2):
+    # Extract coordinates from the tuples
+    x1seg, y1seg = line_start
+    x2seg, y2seg = line_end
+    x1, y1 = rect_diag1
+    x2, y2 = rect_diag2
+    
+    # Normalize the rectangle coordinates
+    rect_left = min(x1, x2)
+    rect_right = max(x1, x2)
+    rect_top = max(y1, y2)
+    rect_bottom = min(y1, y2)
+
+    # Check if both endpoints of the line are inside the rectangle
+    endpoint1_inside = (rect_left <= x1seg <= rect_right) and (rect_bottom <= y1seg <= rect_top)
+    endpoint2_inside = (rect_left <= x2seg <= rect_right) and (rect_bottom <= y2seg <= rect_top)
+
+    return endpoint1_inside and endpoint2_inside
+
 def coordinatesWithinRectangle(x1, y1, x2, y2, x1seg, x2seg, y1seg, y2seg):
     line_start = (x1seg, y1seg)
     line_end = (x2seg, y2seg)
-    rect_diag1 = (x1, y1)
-    rect_diag2 = (x2, y2)
-    return line_rectangle_intersection(line_start, line_end, rect_diag1, rect_diag2)
+    rect_diag1 = (x1, y2)
+    rect_diag2 = (x2, y1)
+
+    isIntersect = line_rectangle_intersection(line_start, line_end, rect_diag1, rect_diag2)
+    isInclude = line_rectangle_include(line_start, line_end, rect_diag1, rect_diag2)
+
+    return isIntersect or isInclude
 
 def interactive_tool(net_info, pad_via_info, pad_diameter, coordinates):
     fig, ax = plt.subplots(figsize=(15, 15))
@@ -413,14 +439,16 @@ def main():
     print("[Input]")
     print("-------")
 
-    net_info, pad_via_info, chip_edge, max_width, grid_size = Parser.Input(
+    raw_net_info, pad_via_info, chip_edge, max_width, grid_size = Parser.Input(
         net_txt, cline_txt, pad_via_txt, layer
     )
+    net_info = raw_net_info
+    fixed_net_info = []
     coordinates =  []
-    interactive_tool(net_info, pad_via_info, pad_diameter, coordinates)
+    interactive_tool(raw_net_info, pad_via_info, pad_diameter, coordinates)
     print(coordinates)
     if (len(coordinates) != 0):
-        net_info=findPartialNets(net_info, coordinates)
+        net_info, fixed_net_info = findPartialNets(net_info, coordinates)
     print("===== Finish Selection =====")
     grid_size = math.ceil(grid_size / pooling_size) * pooling_size
     NET = ChangeType.netinfo2NET(net_info)
@@ -719,7 +747,7 @@ def main():
     print("-------------------")
     total_end = time.time()
     print("Total Time: ", format(total_end - total_start))
-    pic(net_info, pad_via_info, 1, case, pad_diameter, f"{opt_flow}_refined")
+    pic(net_info + fixed_net_info, pad_via_info, 1, case, pad_diameter, f"{opt_flow}_refined")
 
     # f = open(f'../data/{case}/{opt_flow}.log', 'w')
     # print('original number of segments:', num_seg[0], '| length: ', net_leng[0], file=f)
